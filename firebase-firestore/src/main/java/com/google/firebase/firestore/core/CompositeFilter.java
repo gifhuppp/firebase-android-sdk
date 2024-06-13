@@ -17,9 +17,9 @@ package com.google.firebase.firestore.core;
 import android.text.TextUtils;
 import androidx.annotation.Nullable;
 import com.google.firebase.firestore.model.Document;
-import com.google.firebase.firestore.model.FieldPath;
 import com.google.firebase.firestore.util.Function;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /** Represents a filter that is the conjunction or disjunction of other filters. */
@@ -48,13 +48,13 @@ public class CompositeFilter extends Filter {
   private List<FieldFilter> memoizedFlattenedFilters;
 
   public CompositeFilter(List<Filter> filters, Operator operator) {
-    this.filters = filters;
+    this.filters = new ArrayList<>(filters);
     this.operator = operator;
   }
 
   @Override
   public List<Filter> getFilters() {
-    return filters;
+    return Collections.unmodifiableList(filters);
   }
 
   public Operator getOperator() {
@@ -64,26 +64,13 @@ public class CompositeFilter extends Filter {
   @Override
   public List<FieldFilter> getFlattenedFilters() {
     if (memoizedFlattenedFilters != null) {
-      return memoizedFlattenedFilters;
+      return Collections.unmodifiableList(memoizedFlattenedFilters);
     }
     memoizedFlattenedFilters = new ArrayList<>();
     for (Filter subfilter : filters) {
       memoizedFlattenedFilters.addAll(subfilter.getFlattenedFilters());
     }
-    return memoizedFlattenedFilters;
-  }
-
-  /**
-   * Returns the first inequality filter contained within this composite filter. Returns {@code
-   * null} if it does not contain any inequalities.
-   */
-  @Override
-  public FieldPath getFirstInequalityField() {
-    FieldFilter found = findFirstMatchingFilter(f -> f.isInequality());
-    if (found != null) {
-      return found.getField();
-    }
-    return null;
+    return Collections.unmodifiableList(memoizedFlattenedFilters);
   }
 
   public boolean isConjunction() {
@@ -160,9 +147,20 @@ public class CompositeFilter extends Filter {
 
   @Override
   public String getCanonicalId() {
-    // TODO(orquery): Add special case for flat AND filters.
-
     StringBuilder builder = new StringBuilder();
+
+    // Older SDK versions use an implicit AND operation between their filters. In the new SDK
+    // versions, the developer may use an explicit AND filter. To stay consistent with the old
+    // usages, we add a special case to ensure the canonical ID for these two are the same.
+    // For example: `col.whereEquals("a", 1).whereEquals("b", 2)` should have the same canonical ID
+    // as `col.where(and(equals("a",1), equals("b",2)))`.
+    if (isFlatConjunction()) {
+      for (Filter filter : filters) {
+        builder.append(filter.getCanonicalId());
+      }
+      return builder.toString();
+    }
+
     builder.append(operator.toString() + "(");
     builder.append(TextUtils.join(",", filters));
     builder.append(")");
@@ -182,7 +180,6 @@ public class CompositeFilter extends Filter {
     CompositeFilter other = (CompositeFilter) o;
     // Note: This comparison requires order of filters in the list to be the same, and it does not
     // remove duplicate subfilters from each composite filter. It is therefore way less expensive.
-    // TODO(orquery): Consider removing duplicates and ignoring order of filters in the list.
     return operator == other.operator && filters.equals(other.filters);
   }
 
